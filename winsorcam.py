@@ -1,11 +1,15 @@
+try:
+    import torch
+    import torch.nn.functional as F
+    from torch import nn
+except ImportError:
+    raise ImportError(
+        "PyTorch is required but not installed. Install it from https://pytorch.org/get-started/locally/."
+    )
+
+
 from functools import partial
 
-import torch.nn.functional as F
-
-from torch import nn
-import torch
-from pytorch_grad_cam import GradCAM, GradCAMPlusPlus, EigenGradCAM, AblationCAM, RandomCAM, ScoreCAM, XGradCAM, LayerCAM, FullGrad, ShapleyCAM
-from matplotlib import pyplot as plt
 
 
 def resize_gradcams_grouped(gradcams, mode='nearest'):
@@ -110,22 +114,10 @@ class WinsorcamClass(nn.Module):
     A universal wrapper that adds GradCAM functionality to any PyTorch model.
     
     Args:
-        model (nn.Module): Any PyTorch model
-        target_layers (list, optional): List of specific layer names to hook. If provided, only these layers will be hooked.
-        target_layer_types (tuple): Tuple of layer types to hook if target_layers not specified (default: (nn.Conv2d,))
-        auto_register_hooks (bool): Whether to automatically register hooks on initialization
-    
-    Example:
-        >>> model = torchvision.models.resnet50(pretrained=True)
-        >>> # Option 1: Auto-hook all Conv2d layers
-        >>> gradcam_model = UniversalGradCAM(model)
-        >>> 
-        >>> # Option 2: Hook specific layers only
-        >>> gradcam_model = UniversalGradCAM(model, target_layers=['layer4.2.conv3', 'layer4.1.conv3'])
-        >>> 
-        >>> gradcam_model.eval()
-        >>> output = gradcam_model(input_tensor)
-        >>> stacked_gradcam, gradcams, importance = gradcam_model.get_gradcams_and_importance(...)
+        model: The PyTorch model to wrap.
+        target_layers: Optional list of layer names to hook. If None, hooks all layers of specified types.
+        target_layer_types: Tuple of layer types to hook if target_layers is None (default: (nn.Conv2d,)).
+        auto_register_hooks: Whether to automatically register hooks on initialization (default: True).
     """
     
     def __init__(self, model, target_layers=None, target_layer_types=(nn.Conv2d,), auto_register_hooks=True):
@@ -154,7 +146,6 @@ class WinsorcamClass(nn.Module):
                             partial(forward_hook, name=full_name)
                         )
                     )
-            # print(f"Registered {len(self.hooks)} hooks on specified layers: {self.target_layers}")
         else:
             # Hook all layers of specified types
             for name, module in self.model.named_modules():
@@ -173,16 +164,6 @@ class WinsorcamClass(nn.Module):
             hook.remove()
         self.hooks.clear()
     
-    def get_available_layers(self):
-        """Get a list of all layer names that have hooks registered."""
-        if self.target_layers is not None:
-            # Return the specified layers
-            return self.target_layers
-        else:
-            # Return all layers of the target types
-            return [name for name, module in self.model.named_modules() 
-                    if isinstance(module, self.target_layer_types)]
-    
     def __call__(self, x):
         self.storage.clear()  # Clear before forward pass
         return super().__call__(x)
@@ -190,24 +171,28 @@ class WinsorcamClass(nn.Module):
     def forward(self, x):
         return self.model(x)
 
-    def generate_gradcam(self, filter_importances, activations):
-        """Generate individual GradCAM heatmaps for each layer."""
-        gradcams = []
-        for filter_importance, activation in zip(filter_importances, activations):
-            gradcam = torch.sum(filter_importance[:, None, None] * activation.squeeze(), dim=0)
-            gradcam = torch.relu(gradcam)
-            gradcams.append(gradcam)
-        return gradcams, filter_importances
+
     
     @staticmethod
     def winsorize_preserve_zeros(tensor, percentile=99):
         """Winsorize tensor while preserving zero values."""
+        # Handle edge case: if percentile is 0, return all ones (equal weighting)
+        if percentile == 0:
+            return torch.where(tensor > 0, torch.ones_like(tensor), torch.zeros_like(tensor))
+        
         # Identify nonzero values
         nonzero_mask = tensor > 0  
         
         # Compute percentile threshold only for nonzero values
         nonzero_values = tensor[nonzero_mask]
-        threshold = torch.quantile(nonzero_values, percentile / 100) if nonzero_values.numel() > 0 else tensor.max()
+        
+        if nonzero_values.numel() == 0:
+            return tensor
+        
+        # Clamp percentile to valid range
+        percentile = min(max(percentile, 0), 100)
+        
+        threshold = torch.quantile(nonzero_values, percentile / 100)
         
         # Apply winsorization only to nonzero values
         winsorized_tensor = torch.where(nonzero_mask, tensor.clamp(max=threshold), tensor)
@@ -234,13 +219,15 @@ class WinsorcamClass(nn.Module):
         normalized[nonzero_mask] = nonzero_values
         
         return normalized
-    
-    @staticmethod
-    def normalize_tensor(tensor, high=1, low=-1):
-        """Normalize tensor to [low, high] range."""
-        if ((tensor.max() - tensor.min()) * (high - low)) == 0:
-            return torch.zeros_like(tensor)
-        return low + (tensor - tensor.min()) / (tensor.max() - tensor.min()) * (high - low)
+
+    def generate_gradcam(self, filter_importances, activations):
+        """Generate individual GradCAM heatmaps for each layer."""
+        gradcams = []
+        for filter_importance, activation in zip(filter_importances, activations):
+            gradcam = torch.sum(filter_importance[:, None, None] * activation.squeeze(), dim=0)
+            gradcam = torch.relu(gradcam)
+            gradcams.append(gradcam)
+        return gradcams, filter_importances
     
     def get_gradcams_and_importance(self, input_tensor, target_class, layers,
                                 gradient_aggregation_method,
@@ -397,7 +384,11 @@ class WinsorcamClass(nn.Module):
         return filter_importances
 
     def generate_layer_importances(self, importance_lists, layer_aggregation_method):
-        """Aggregate filter importances into layer-level importances."""
+        """Aggregate filter importances into layer-level importances.
+        Args:
+            importance_lists: List of filter importance tensors for each layer.
+            layer_aggregation_method: Method to aggregate filter importances into a single layer importance score.
+        """
         match layer_aggregation_method:
             case 'mean':
                 importance_lists = [torch.mean(importance_list) for importance_list in importance_lists]
@@ -429,80 +420,6 @@ class WinsorcamClass(nn.Module):
         self.storage.clear()
         return stacked_gradcam, importance_tensor
 
-    def generate_saliency_map(self, input_tensor, target_class):
-        """Generate a saliency map based on input gradients."""
-        self.eval()
-        input_tensor.requires_grad_()
-        self._unregister_hooks()
-        
-        output = self(input_tensor)
-        self.zero_grad()
-        self.storage.clear()
-        
-        target = output[0, target_class]
-        target.backward()
-        
-        saliency_map = input_tensor.grad.data
-        saliency_map = torch.abs(saliency_map)
-        saliency_map = self.normalize_tensor(saliency_map, high=1, low=0)
-        saliency_map = saliency_map.squeeze()
-        
-        self._register_hooks()
-        saliency_map = torch.mean(saliency_map, dim=0)
-
-        return saliency_map
-    
-    def get_cam_comparative(self, image_tensor, method):
-        """Compare with other CAM methods from pytorch_grad_cam library."""
-        match method:
-            case 'gradcam':
-                method_func = GradCAM
-            case 'gradcampp':
-                method_func = GradCAMPlusPlus
-            case 'scorecam':
-                method_func = ScoreCAM
-            case 'xgradcam':
-                method_func = XGradCAM
-            case 'fullgrad':
-                method_func = FullGrad
-                # FullGrad requires Conv2d layers with biases, excluding auxiliary classifiers for InceptionV3 compatibility
-                target_layers = [module for name, module in self.model.named_modules() 
-                                if isinstance(module, nn.Conv2d) and hasattr(module, 'bias') and module.bias is not None 
-                                and 'AuxLogits' not in name]
-            case 'ablation':
-                method_func = AblationCAM
-            case 'layercam':
-                method_func = LayerCAM
-            case 'shapleycam':
-                method_func = ShapleyCAM
-            case _:
-                raise ValueError(f"Unknown CAM method: {method}")
-
-        # For non-FullGrad methods, use only the last Conv2d layer
-        if method != 'fullgrad':
-            target_layers = [module for name, module in self.model.named_modules() 
-                            if isinstance(module, nn.Conv2d)][-1:]
-        
-        cam = method_func(self.model, target_layers=target_layers)
-        
-        if not image_tensor.requires_grad:
-            image_tensor = image_tensor.detach()
-        
-        grayscale_cam = cam(input_tensor=image_tensor.unsqueeze(0))
-        
-        if torch.is_tensor(grayscale_cam):
-            grayscale_cam = grayscale_cam.cpu().numpy()
-        
-        del cam
-        torch.cuda.empty_cache()
-        
-        return grayscale_cam
-    
-    def __del__(self):
-        self._unregister_hooks()
-    
-    def remove_hooks(self):
-        self._unregister_hooks()
 
 
 # Wrapper function

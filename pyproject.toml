@@ -1,0 +1,39 @@
+[project]
+name = "winsorcam"
+version = "0.1.0"
+description = "A PyTorch-based heatmap generator for Winsor-CAM."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { file = "LICENSE" }
+authors = [
+  { name = "Casey", email = "you@example.com" }
+]
+
+[project.optional-dependencies]
+simple_vis = ["matplotlib"]
+advanced_vis = [
+  "numpy>=1.26,<2",
+  "matplotlib",
+  "imageio",
+  "ipykernel",
+  "ipywidgets",
+  "scikit-image",
+  "scikit-learn",
+  "tqdm",
+  "sympy",
+  "notebook",
+  "grad-cam",
+  "ttach"
+]
+
+[project.urls]
+Homepage = "https://github.com/USD-AI-ResearchLab/Winsor-CAM"
+Source = "https://github.com/USD-AI-ResearchLab/Winsor-CAM"
+Issues = "https://github.com/USD-AI-ResearchLab/Winsor-CAM/issues"
+
+[tool.setuptools]
+py-modules = ["winsorcam"]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"

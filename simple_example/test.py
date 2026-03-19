@@ -1,5 +1,6 @@
 # --- Optional visualization (matplotlib) ---
 try:
+    import matplotlib.pyplot as plt
     from matplotlib.pyplot import imshow, show
 except ImportError:
     raise ImportError(
@@ -73,7 +74,7 @@ predicted_class = torch.argmax(output, dim=1).item()
 print(f"Predicted class: {predicted_class}")
 
 # In this case want to use all the layers available in the model for the explanation
-# Tf other layers are desired then you will need to specify them here by indexes
+# If other layers are desired then you will need to specify them here by indexes
 desired_layer_names = model_usable_layer_names[:]
 
 
@@ -106,7 +107,7 @@ winsor_gradcam, winsor_importance = winsorcam.winsorize_stacked_gradcam(
 # lets make a simple plot of 2x5 with the original image, the the winsorcam explanation
 # normal final layer gradcam, the image overlayed with the winsorcam explanation, and the image overlaid with the normal gradcam
 # underneath of the winsorcams I want a plot of the 
-import matplotlib.pyplot as plt
+
 #first resize the original image to be the same size as the winsorcam explanation
 image = transforms.Resize(winsor_gradcam.shape[1:])(image)
 
@@ -133,4 +134,9 @@ axs[4].imshow(image.permute(1, 2, 0).cpu().numpy().astype(int))
 axs[4].imshow(stacked_gradcam[-1].squeeze().cpu().numpy(), alpha=0.5, cmap='nipy_spectral')
 axs[4].set_title("Image with Final Layer GradCAM Overlay")
 
+# set a tight layout so the titles are not overlapping with the images
+plt.tight_layout()
+
+# save the figure in the current directory
+plt.savefig("winsorcam_example.png")
 plt.show()
